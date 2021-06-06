@@ -5,11 +5,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 
-// Há problema em esperas ativas para ter as threads a escrever de forma sequencial ?
-
 // Threads em windows e linux, tenho de ter algo a verificar o sistema operativo, e criar as threads conforme o sistema operativo atual ?
-
-
 
 typedef struct Works{
     int id;
@@ -49,48 +45,63 @@ void writeProcessedBlock(work* w){
     // printf("id: %d\n", w->id);
 }
 
+int writeRleSeq(char byte, int counter, unsigned char *buffer, int pos){
+    unsigned char processed[50] = {0};
+    int n;
+
+    if(counter > 3 || byte == 0){     // Worth compress if it repeated at least 4 times
+        processed[0] = 0;               // RLE indication symbol
+        processed[1] = byte;            // Symbol of message
+        n = 2;
+
+        while(counter > 255){
+            processed[n] = 0;           // For each '0', symbol appears 255 times
+            n++;
+            counter -= 255;
+        }
+        
+        processed[n] = counter & 0xFF;  // Number of repetitions
+        memcpy(buffer + pos, processed, n+1);
+        return n+1;
+    }else{
+        n = counter;
+        while(counter != 0){
+            memcpy(buffer + pos, &byte, 1);
+            pos += 1;
+            counter--;
+        }
+        return n;
+    }
+}
+
 void rle(work* w){
     int pos = 0;
     int counter = 0;
-    char byte = w->buffer_in[0];
-    char processed[50] = {0};
-    int n;
+    unsigned char byte = w->buffer_in[0];
 
     w->buffer_out = malloc(w->size * sizeof(char)); // Allocate space on output buffer
 
     for(int i = 0; i < w->size; i++){
         if(w->buffer_in[i] == byte){ // If is equals than the previous
             counter++;
-        }else{  // If it is different from the previous
-            if(counter > 3 || byte == '0'){   // Worth compress if it repeated at least 4 times
-                if(counter < 256){
-                    n = sprintf(processed, "0%c%d", byte, counter);
-                }else{  // If there are at least 256 equal bytes
-                    n = sprintf(processed, "0%c", byte);
-                    while(counter > 255){
-                        n += sprintf(processed+n, "0");
-                        counter -= 255;
-                    }
-                    n += sprintf(processed+n, "%d", counter);
-                }
-                memcpy(w->buffer_out + pos, processed, n);
-                pos += n;
-            }else{
-                while(counter != 0){
-                    memcpy(w->buffer_out + pos, &byte, 1);
-                    pos += 1;
-                    counter--;
-                }
-            }
-            counter = 1;
+        }else{
+            pos += writeRleSeq(byte, counter, w->buffer_out, pos);
             byte = w->buffer_in[i];
+            counter = 1;
+        }
+
+        if(i+1 == w->size){
+            pos += writeRleSeq(byte, counter, w->buffer_out, pos);
         }
     }
 
     for(int x=0; x<pos; x++){
-        printf("%c ", w->buffer_out[x]);
+        // printf("[%c](%x)", w->buffer_out[x], w->buffer_out[x]);
     }
-    printf("\nend\n");
+    sleep(5);
+    printf("\n[%d] initial size (bytes): %d", w->id, w->size);
+    printf("\n[%d] final size (bytes): %d", w->id, pos);
+    printf("\n[%d] end\n", w->id);
 }
 
 void* processBlock(work* w){ // sq mudar o nome para workThreadHandler
@@ -152,20 +163,16 @@ int main(int argc, char *argv[]){
     pthread_mutex_init(&thr, 0);
     char *buffer = malloc(bsize * sizeof(char));
     while(n = fread(buffer, sizeof(char), bsize, fd)){
-        // printf("N = %d\n", n);
-        // printf("[%d]: %c%c%c \n", n, buffer[0], buffer[1], buffer[2]);
+
         work *w = newBlock(buffer, n, id);
         pthread_create(&tid, NULL, (void *)&processBlock, w);
         id++;
     }
 
     work *aux = head;
-
-    // SQ NAO ESTA A DAR JOIN!!!!!!!!!! VERIFICAR
     while(aux!=NULL){
         pthread_join(aux->tid, NULL);
         aux=aux->next;
-        sleep(1);
     }
 
     return 0;
