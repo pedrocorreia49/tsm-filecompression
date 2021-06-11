@@ -34,6 +34,7 @@ pthread_mutex_t thr;
 
 int turn = 1;
 bool worthRLE = false;
+bool debug = false;
 
 char *inputFile;
 
@@ -73,7 +74,7 @@ void printFreqs(work* w){
         w->freqs[i].byte = i;
     }
 
-    printf("\n -----------------\n");
+    printf("\n\n -----------------\n");
     printf("| Byte\t|  Times  |\n");
     printf("|-----------------|\n");
     for(unsigned char i = 0; i < 254; i++){
@@ -89,10 +90,10 @@ void printFreqs(work* w){
         w->freqs[byte] = w->freqs[i];
         w->freqs[i] = p;
 
-        // if(w->freqs[i].counter != 0)
+        if(w->freqs[i].counter != 0)
             printf("| %x\t| %d times |\n", w->freqs[i].byte, w->freqs[i].counter);
     }
-    // if(w->freqs[254].counter != 0)
+    if(w->freqs[254].counter != 0)
         printf("| %x\t| %d times |\n", w->freqs[254].byte, w->freqs[254].counter);
 
     printf(" -----------------\n");
@@ -134,32 +135,33 @@ void debugRLE(){
 
     printf("Number of processed blocks: %d\n", nBLocks);
 
-    //IF FLAG DE DEBUG A ON
-    if(worthRLE){
-        if(head->size_out >= 160){
-            printf("\nFirst 160 bytes of block 1:\n[");
-            for(int i = 0; i < 160; i++){
-                printf(" %x", head->buffer_out[i]);
+    if(debug){
+        if(worthRLE){
+            if(head->size_out >= 160){
+                printf("\nFirst 160 bytes of block 1:\n[");
+                for(int i = 0; i < 160; i++){
+                    printf(" %x", head->buffer_out[i]);
+                }
+                printf(" ]\n");
+            }else{  // If size of less than 160, print only size
+                printf("\nFirst %d bytes of block 1:\n[", head->size_out);
+                for(int i = 0; i < head->size_out; i++){
+                    printf(" %x", head->buffer_out[i]);
+                }
+                printf(" ]\n");
             }
-            printf(" ]\n");
-        }else{  // If size of less than 160, print only size
-            printf("\nFirst %d bytes of block 1:\n[", head->size_out);
-            for(int i = 0; i < head->size_out; i++){
-                printf(" %x", head->buffer_out[i]);
-            }
-            printf(" ]\n");
-        }
 
-        if(head->size_out >= 80){
-            printf("\nLast 80 bytes of block 1:\n[");
-            for(int i = (head->size_out)-80; i < head->size_out; i++){
-                printf(" %x", head->buffer_out[i]);
+            if(head->size_out >= 80){
+                printf("\nLast 80 bytes of block 1:\n[");
+                for(int i = (head->size_out)-80; i < head->size_out; i++){
+                    printf(" %x", head->buffer_out[i]);
+                }
+                printf(" ]");
             }
-            printf(" ]");
         }
+        
+        printFreqs(head);
     }
-    
-    // printFreqs(head);
 
     // IF RLE WAS NOT USED, END SIZE IS INITIALSIZE, OTHERWISE
     printf("\nInitial file size (bytes): %d\nFinal file size (bytes): %d\n", initialSize, endSize);
@@ -192,7 +194,7 @@ void writeProcessedBlock(work* w){
 }
 
 int writeRleSeq(char byte, int counter, unsigned char *buffer, int pos, pair *freqs){
-    unsigned char processed[50] = {0};
+    unsigned char *processed = malloc(head->size_in);
     int n;
 
     if(counter > 3 || byte == 0){       // Worth compress if it repeated at least 4 times
@@ -213,6 +215,7 @@ int writeRleSeq(char byte, int counter, unsigned char *buffer, int pos, pair *fr
         freqs[byte].counter++;              // Increment number of repetitions of this byte (symbol)
         freqs[counter & 0xFF].counter++;    // Increment number of repetitions of this byte (counter)
 
+        free(processed);
         return n+1;                         // Return bytes written on output buffer
     }else{
         n = counter;
@@ -224,6 +227,7 @@ int writeRleSeq(char byte, int counter, unsigned char *buffer, int pos, pair *fr
 
         freqs[byte].counter += n;           // Increment number of repetitions of this byte
 
+        free(processed);
         return n;                           // Return bytes written on output buffer
     }
 }
@@ -234,6 +238,15 @@ void rle(work* w){
     unsigned char byte = w->buffer_in[0];
 
     w->buffer_out = malloc(w->size_in * sizeof(char)); // Allocate space on output buffer
+
+    if(w->size_in < 256){
+        memcpy(w->buffer_out, w->buffer_in, w->size_in);
+        for(int i = 0; i < w->size_in; i++){
+            w->freqs[w->buffer_in[i]].counter++;
+        }
+        w->size_out = w->size_in;
+        return;
+    }
 
     for(int i = 0; i < w->size_in; i++){
         if(w->buffer_in[i] == byte){ // If is equals than the previous
@@ -260,8 +273,6 @@ void rle(work* w){
 }
 
 void* processBlock(work* w){
-    w->tid = pthread_self();    // Store thread id on struct to join thread later
-
     if(w->id == 1)
         tm = clock();   // Get time before starting RLE on first
     
@@ -290,14 +301,12 @@ int main(int argc, char *argv[]){
     int id = 1;
     int bsize = 64000;
     FILE* fd;
-    pthread_t tid;
 
     if(argc == 1){
         return -1;
     }else{
         for(i=1; i<argc; i++){
             if(argv[i][0] == '-'){
-                printf("-%c %s\n", argv[i][1], argv[i+1]);
                 switch(argv[i][1]){
                     case 'S':
                         if(argv[i+1]){
@@ -310,10 +319,13 @@ int main(int argc, char *argv[]){
                                 bsize=64000000;
                                 printf("Buffer Size is now 64Mbytes (maximum value)\n");
                             }
+                            i++;
                         }else{
                             printf("Bad usage, aborting ...");
                             return -1;
                         }
+                    case 'd':
+                        debug=true;
                 }
             }
         }
@@ -333,7 +345,7 @@ int main(int argc, char *argv[]){
     char *buffer = malloc(bsize * sizeof(char));
     while(n = fread(buffer, sizeof(char), bsize, fd)){
         work *w = newBlock(buffer, n, id);
-        pthread_create(&tid, NULL, (void *)&processBlock, w);
+        pthread_create(&(w->tid), NULL, (void *)&processBlock, w);
         id++;
     }
     fclose(fd);
@@ -343,7 +355,6 @@ int main(int argc, char *argv[]){
         pthread_join(aux->tid, NULL);
         aux=aux->next;
     }
-    sleep(1);
 
     return 0;
 }
