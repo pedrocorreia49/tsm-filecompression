@@ -33,8 +33,14 @@ FILE* fd;
 pthread_mutex_t thr;
 
 int turn = 1;
+
 bool worthRLE = false;
+bool firstEndedRLE = false;
 bool debug = false;
+
+bool faseA = true;
+bool faseB = false;
+bool faseC = false;
 
 char *inputFile;
 
@@ -65,18 +71,14 @@ void printOut(work* w){
     }
 }
 
-void printFreqs(work* w){
+void orderFreqs(work* w){
     unsigned char byte=0, val=0;
     pair p;
-
 
     for(unsigned char i = 0; i < 255; i++){ // Initialize field 'byte' of Pair freq
         w->freqs[i].byte = i;
     }
 
-    printf("\n\n -----------------\n");
-    printf("| Byte\t|  Times  |\n");
-    printf("|-----------------|\n");
     for(unsigned char i = 0; i < 254; i++){
         byte = i;
         for(unsigned char j = i+1; j < 255; j++){
@@ -89,14 +91,26 @@ void printFreqs(work* w){
 
         w->freqs[byte] = w->freqs[i];
         w->freqs[i] = p;
-
-        if(w->freqs[i].counter != 0)
-            printf("| %x\t| %d times |\n", w->freqs[i].byte, w->freqs[i].counter);
     }
-    if(w->freqs[254].counter != 0)
-        printf("| %x\t| %d times |\n", w->freqs[254].byte, w->freqs[254].counter);
+}
 
-    printf(" -----------------\n");
+void freqsIn(work* w){  // Count frequency of symbols of buffer_in
+    memset(w->freqs, 0, 255*sizeof(pair)); // Clear array of frequencys
+
+    for(unsigned char i = 0; i < w->size_in; i++){
+        w->freqs[w->buffer_in[i]].counter++;
+    }
+}
+
+void printFreqs(work* w){
+    printf("\n\n -----------------------\n");
+    printf("| Byte\t|    Times\t|\n");
+    printf("|-----------------------|\n");
+    for(unsigned char i = 0; i < 255; i++){
+        // if(w->freqs[i].counter != 0)
+        printf("| %x\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
+    }
+    printf(" -----------------------\n");
 }
 
 void debugRLE(){
@@ -108,7 +122,7 @@ void debugRLE(){
         nBLocks++;
 
         secondLastSize = lastSize;
-        lastSize = aux->size_out;
+        lastSize = aux->size_in;
 
         initialSize += aux->size_in;
         endSize += aux->size_out;
@@ -128,7 +142,7 @@ void debugRLE(){
     }
 
     if(nBLocks>1){
-        printf("Processed blocks size (bytes): %d|%d\n", secondLastSize, lastSize);
+        printf("Processed blocks size (ALL|LAST) (bytes): %d|%d\n", secondLastSize, lastSize);
     }else{
         printf("Processed block size (bytes): %d\n", lastSize);
     }
@@ -141,20 +155,26 @@ void debugRLE(){
                 printf("\nFirst 160 bytes of block 1:\n[");
                 for(int i = 0; i < 160; i++){
                     printf(" %x", head->buffer_out[i]);
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\n");
                 }
                 printf(" ]\n");
             }else{  // If size of less than 160, print only size
                 printf("\nFirst %d bytes of block 1:\n[", head->size_out);
                 for(int i = 0; i < head->size_out; i++){
                     printf(" %x", head->buffer_out[i]);
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\n");
                 }
                 printf(" ]\n");
             }
 
             if(head->size_out >= 80){
                 printf("\nLast 80 bytes of block 1:\n[");
-                for(int i = (head->size_out)-80; i < head->size_out; i++){
+                for(int i = (head->size_out)-80, x=0; i < head->size_out; i++, x++){
                     printf(" %x", head->buffer_out[i]);
+                    if((x+1) % 8 == 0 && x != 0)
+                        printf("\n");
                 }
                 printf(" ]");
             }
@@ -163,7 +183,7 @@ void debugRLE(){
         printFreqs(head);
     }
 
-    // IF RLE WAS NOT USED, END SIZE IS INITIALSIZE, OTHERWISE
+    // IF RLE WAS NOT USED, END SIZE IS INITIAL SIZE, OTHERWISE
     printf("\nInitial file size (bytes): %d\nFinal file size (bytes): %d\n", initialSize, endSize);
 
     float compression = (initialSize-endSize) / (float)initialSize;
@@ -173,7 +193,7 @@ void debugRLE(){
     printf("\n------------ END DEBUG A ------------\n");
 }
 
-void writeProcessedBlock(work* w){
+void writeRLEBlock(work* w){
     if(w->id == 1){
         char f[strlen(inputFile)+4];
         strcpy(f, inputFile);
@@ -181,11 +201,7 @@ void writeProcessedBlock(work* w){
         fd = fopen(f, "w");
     }
 
-    if(worthRLE){
-        fwrite(w->buffer_out, 1, w->size_out, fd);
-    }else{
-        fwrite(w->buffer_in, 1, w->size_in, fd);
-    }
+    fwrite(w->buffer_out, 1, w->size_out, fd);
 
     if(w->next == NULL){ // Last block written, show log info
         fclose(fd);
@@ -245,6 +261,10 @@ void rle(work* w){
             w->freqs[w->buffer_in[i]].counter++;
         }
         w->size_out = w->size_in;
+        orderFreqs(w);
+        if(w->id == 1){
+            firstEndedRLE = true;
+        }
         return;
     }
 
@@ -263,12 +283,14 @@ void rle(work* w){
     }
 
     w->size_out = pos;  // pos has the output buffer size
+    orderFreqs(w);
 
     if(w->id == 1){     // Check if RLE was worth on first block
         float compression =  (w->size_in - w->size_out) / (float)w->size_in;
         if(compression >= 0.05){ // Compression higher than 5%, it's worth
             worthRLE = true;
         }
+        firstEndedRLE = true;
     }
 }
 
@@ -277,20 +299,29 @@ void* processBlock(work* w){
         tm = clock();   // Get time before starting RLE on first
     
     rle(w);
-    if(w->next == NULL){
-        tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000;       
+    if(w->next == NULL){ // If last block has been already called to RLE
+        tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get finish time of RLE phase
     }
 
     while(1){
         if(w->id == turn){
-            pthread_mutex_lock(&thr);
+            // pthread_mutex_lock(&thr);
 
+            while(!firstEndedRLE){} // Wait until first block end RLE to check if we can keep going
+            if(!worthRLE){ // First already ended, and is not worth the rle, we need to recompute frequencys to buffer in
+                freqsIn(w);
+                orderFreqs(w);
+                memcpy(w->buffer_out, w->buffer_in, w->size_in);    // RLE not worth on block 1, so every buffer_out will be buffer_in
+                w->size_out = w->size_in;                           // And size_out will be the size_in
+            }
 
-            writeProcessedBlock(w); // Por agora escrevo o bloco não processado
-            
-            turn++;
+            if(faseA){
+                writeRLEBlock(w);
+            }
+            turn++; // Permit the next 
+            shannonFano(w);
 
-            pthread_mutex_unlock(&thr);
+            // pthread_mutex_unlock(&thr);
             pthread_exit(NULL);
         }
     }
