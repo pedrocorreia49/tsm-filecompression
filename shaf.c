@@ -22,7 +22,7 @@ typedef struct Works{
     int size_out;
     unsigned char *buffer_in;
     unsigned char *buffer_out;
-    pair freqs[255];
+    pair freqs[256];
     pthread_t tid;
     struct Works *next;
 } work;
@@ -78,13 +78,13 @@ void orderFreqs(work* w){
     unsigned char byte=0, val=0;
     pair p = {0};
 
-    for(unsigned char i = 0; i < 255; i++){ // Initialize field 'byte' of Pair freq
+    for(int i = 0; i < 256; i++){ // Initialize field 'byte' of Pair freq
         w->freqs[i].byte = i;
     }
 
-    for(unsigned char i = 0; i < 254; i++){
+    for(int i = 0; i < 255; i++){
         byte = i;
-        for(unsigned char j = i+1; j < 255; j++){
+        for(int j = i+1; j < 256; j++){
             if(w->freqs[j].counter > w->freqs[byte].counter){
                 byte = j;
             }
@@ -98,25 +98,45 @@ void orderFreqs(work* w){
 }
 
 void freqsIn(work* w){  // Count frequency of symbols of buffer_in
-    memset(w->freqs, 0, 255*sizeof(pair)); // Clear array of frequencys
+    memset(w->freqs, 0, 256*sizeof(pair)); // Clear array of frequencys
 
-    for(unsigned char i = 0; i < w->size_in; i++){
+    for(int i = 0; i < w->size_in; i++){
         w->freqs[w->buffer_in[i]].counter++;
     }
+    orderFreqs(w);
 }
 
 void printFreqs(work* w){
     printf("\n\n -----------------------\n");
     printf("| Byte\t|    Times\t|\n");
     printf("|-----------------------|\n");
-    for(unsigned char i = 0; i < 255; i++){
+    for(int i = 0; i < 256; i++){
         if(w->freqs[i].counter != 0)
         printf("| %x\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
     }
     printf(" -----------------------\n");
 }
 
-void debug(){
+void printSFTable(work* w){
+    while(w->id != turn){}; // Block thread until it reaches it's turn
+
+    printf("\n %d -------------------------------\n", w->id);
+    printf("| Byte\t| Frequency\t| Code\t|\n");
+    printf("|-------------------------------|\n");
+    for(int i = 0; i < 256; i++){
+        if(w->freqs[i].counter != 0){
+            printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+            for(int j=0; j<w->freqs[i].lenght; j++){
+                printf("%d", (w->freqs[i].code >> (w->freqs[i].lenght-j-1)) & 1);
+            }
+            printf("\t|\n");
+        }
+    }
+    printf(" -------------------------------\n");
+    turn++;
+}
+
+void debugFun(){
     work* aux = head;
     int nBLocks = 0, initialSize=0, endSize=0;
     int lastSize, secondLastSize;
@@ -191,7 +211,11 @@ void debug(){
             }
         }
         
-        printFreqs(head);
+        if(faseA){
+            printFreqs(head);
+        }else if(faseB){
+            printSFTable(head);
+        }
     }
 
     // IF RLE WAS NOT USED, END SIZE IS INITIAL SIZE, OTHERWISE
@@ -441,11 +465,9 @@ void shannonCode(int start, int end, work* w){
 void shannonFano(work* w){
     if(w->size_out >= 256){
         shannonCode(0, 254, w);
+    }else{
+        printf("Not doing SF, because output from A or size_in is less than 256\n");
     }
-}
-
-void printSFTable(work* w){
-
 }
 
 void* processBlock(work* w){
@@ -453,10 +475,10 @@ void* processBlock(work* w){
         tm = clock();       // Get time before starting RLE on first block
     
     rle(w);
+
     while(!firstEndedRLE){} // Wait until first block end RLE to check if we can keep going
     if(!worthRLE){          // First already ended, and is not worth the rle, we need to recompute frequencys to buffer in
         freqsIn(w);
-        orderFreqs(w);
         memcpy(w->buffer_out, w->buffer_in, w->size_in);    // RLE not worth on block 1, so every buffer_out will be buffer_in
         w->size_out = w->size_in;                           // And size_out will be the size_in
     }
