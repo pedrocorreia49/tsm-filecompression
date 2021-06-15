@@ -12,6 +12,8 @@
 typedef struct Pair{
     unsigned char byte;
     unsigned char counter;
+    unsigned char lenght;
+    int code;
 } pair;
 
 typedef struct Works{
@@ -38,14 +40,15 @@ bool worthRLE = false;
 bool firstEndedRLE = false;
 bool debug = false;
 
-bool faseA = true;
+bool faseA = false;
 bool faseB = false;
 bool faseC = false;
 
 char *inputFile;
 
-clock_t tm;
+clock_t tm, initB;
 double tmRLE;
+double tmSF;
 
 work* newBlock(char* buff_in, int size, int id){
     work *temp = malloc(sizeof(work));
@@ -73,7 +76,7 @@ void printOut(work* w){
 
 void orderFreqs(work* w){
     unsigned char byte=0, val=0;
-    pair p;
+    pair p = {0};
 
     for(unsigned char i = 0; i < 255; i++){ // Initialize field 'byte' of Pair freq
         w->freqs[i].byte = i;
@@ -107,10 +110,98 @@ void printFreqs(work* w){
     printf("| Byte\t|    Times\t|\n");
     printf("|-----------------------|\n");
     for(unsigned char i = 0; i < 255; i++){
-        // if(w->freqs[i].counter != 0)
+        if(w->freqs[i].counter != 0)
         printf("| %x\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
     }
     printf(" -----------------------\n");
+}
+
+void debug(){
+    work* aux = head;
+    int nBLocks = 0, initialSize=0, endSize=0;
+    int lastSize, secondLastSize;
+
+    while(aux != NULL){
+        nBLocks++;
+
+        secondLastSize = lastSize;
+        lastSize = aux->size_in;
+
+        initialSize += aux->size_in;
+        endSize += aux->size_out;
+
+        aux = aux->next;
+    }
+
+    printf("--------------- DEBUG ---------------\n");
+    printf("Coded by Pedro Correia, Universidade do Minho on 10/06/2021\n\n");
+    printf("Input file: %s\n", inputFile);
+
+    if(faseA){
+        printf("Output file: %s.rle\n", inputFile);
+    }else if(faseB){
+        printf("Output file: No Output\n");
+    }else if(faseC){
+        // TODO
+    }
+
+    printf("Processed with RLE? ");
+    if(worthRLE){
+        printf("Yes\n");
+    }else{
+        printf("No\n");
+    }
+
+    if(nBLocks>1){
+        printf("Processed blocks size (ALL|LAST) (bytes): %d|%d\n", secondLastSize, lastSize);
+    }else{
+        printf("Processed block size (bytes): %d\n", lastSize);
+    }
+
+    printf("Number of processed blocks: %d\n", nBLocks);
+
+    if(debug){
+        if(worthRLE){
+            if(head->size_out >= 160){
+                printf("\nFirst 160 bytes of block 1:\n[");
+                for(int i = 0; i < 160; i++){
+                    printf(" %x", head->buffer_out[i]);
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\n");
+                }
+                printf(" ]\n");
+            }else{  // If size of less than 160, print only size
+                printf("\nFirst %d bytes of block 1:\n[", head->size_out);
+                for(int i = 0; i < head->size_out; i++){
+                    printf(" %x", head->buffer_out[i]);
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\n");
+                }
+                printf(" ]\n");
+            }
+
+            if(head->size_out >= 80){
+                printf("\nLast 80 bytes of block 1:\n[");
+                for(int i = (head->size_out)-80, x=0; i < head->size_out; i++, x++){
+                    printf(" %x", head->buffer_out[i]);
+                    if((x+1) % 8 == 0 && x != 0)
+                        printf("\n");
+                }
+                printf(" ]");
+            }
+        }
+        
+        printFreqs(head);
+    }
+
+    // IF RLE WAS NOT USED, END SIZE IS INITIAL SIZE, OTHERWISE
+    printf("\nInitial file size (bytes): %d\nFinal file size (bytes): %d\n", initialSize, endSize);
+
+    float compression = (initialSize-endSize) / (float)initialSize;
+    printf("Compression: %0.2f%%\n", compression*100);
+    printf("A fase execution time: %.3fms", tmRLE);
+
+    printf("\n------------- END DEBUG -------------\n");
 }
 
 void debugRLE(){
@@ -194,6 +285,8 @@ void debugRLE(){
 }
 
 void writeRLEBlock(work* w){
+    while(w->id != turn){}; // Block thread until it reaches it's turn
+
     if(w->id == 1){
         char f[strlen(inputFile)+4];
         strcpy(f, inputFile);
@@ -202,6 +295,7 @@ void writeRLEBlock(work* w){
     }
 
     fwrite(w->buffer_out, 1, w->size_out, fd);
+    turn++; // Make the next block leave while cycle
 
     if(w->next == NULL){ // Last block written, show log info
         fclose(fd);
@@ -294,37 +388,100 @@ void rle(work* w){
     }
 }
 
+int bestDiv(int start, int end, work* w){
+    int up=start, down=end;
+    int sumUp = w->freqs[up].counter;
+    int sumDown = w->freqs[down].counter;
+
+    while((down-up) != 1){
+        if(sumUp <= sumDown){
+            up++;
+            sumUp += w->freqs[up].counter;
+        }else{
+            down--;
+            sumDown += w->freqs[down].counter;
+        }
+    }
+    return up; 
+}
+
+void addBit(bool bit, work* w, int start, int end){
+    int byte = start;
+    while(byte <= end){
+        if(w->freqs[byte].lenght < 32){
+            if(bit){
+                w->freqs[byte].code = (w->freqs[byte].code << 1) | 1;
+            }else{
+                w->freqs[byte].code = (w->freqs[byte].code << 1);
+            }
+            w->freqs[byte].lenght++;
+        }else{
+            printf("NAO PODE\n");
+            // TEM DE TERMINAR, CÓDIGO ULTRAPASSA 32 bits, o inteiro nao suporta
+        }
+        byte++;
+    }
+}
+
+void shannonCode(int start, int end, work* w){
+    int mid;
+
+    while(w->freqs[end].counter == 0){
+        end--;
+    }
+    if(start != end){
+        mid = bestDiv(start, end, w);
+        addBit(false, w, start, mid);
+        addBit(true, w, mid+1, end);
+        shannonCode(start, mid, w);
+        shannonCode(mid+1, end, w);
+    }
+}
+
+void shannonFano(work* w){
+    if(w->size_out >= 256){
+        shannonCode(0, 254, w);
+    }
+}
+
+void printSFTable(work* w){
+
+}
+
 void* processBlock(work* w){
     if(w->id == 1)
-        tm = clock();   // Get time before starting RLE on first
+        tm = clock();       // Get time before starting RLE on first block
     
     rle(w);
+    while(!firstEndedRLE){} // Wait until first block end RLE to check if we can keep going
+    if(!worthRLE){          // First already ended, and is not worth the rle, we need to recompute frequencys to buffer in
+        freqsIn(w);
+        orderFreqs(w);
+        memcpy(w->buffer_out, w->buffer_in, w->size_in);    // RLE not worth on block 1, so every buffer_out will be buffer_in
+        w->size_out = w->size_in;                           // And size_out will be the size_in
+    }
     if(w->next == NULL){ // If last block has been already called to RLE
         tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get finish time of RLE phase
     }
 
-    while(1){
-        if(w->id == turn){
-            // pthread_mutex_lock(&thr);
-
-            while(!firstEndedRLE){} // Wait until first block end RLE to check if we can keep going
-            if(!worthRLE){ // First already ended, and is not worth the rle, we need to recompute frequencys to buffer in
-                freqsIn(w);
-                orderFreqs(w);
-                memcpy(w->buffer_out, w->buffer_in, w->size_in);    // RLE not worth on block 1, so every buffer_out will be buffer_in
-                w->size_out = w->size_in;                           // And size_out will be the size_in
-            }
-
-            if(faseA){
-                writeRLEBlock(w);
-            }
-            turn++; // Permit the next 
-            shannonFano(w);
-
-            // pthread_mutex_unlock(&thr);
-            pthread_exit(NULL);
-        }
+    if(faseA){
+        writeRLEBlock(w);
+        pthread_exit(NULL);
     }
+
+    if(w->id == 1){
+        initB = clock();       // Get time before starting SF on first block
+    }
+    shannonFano(w);
+    if(w->next == NULL){ // If last block has been already called to RLE
+        tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of RLE phase
+    }
+    if(faseB){
+        printSFTable(w);
+        pthread_exit(NULL);
+    }
+
+    pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[]){
@@ -355,8 +512,25 @@ int main(int argc, char *argv[]){
                             printf("Bad usage, aborting ...");
                             return -1;
                         }
+                        break;
+                    case 'A':
+                        faseA = true;
+                        faseB = false;
+                        faseC = false;
+                        break;
+                    case 'B':
+                        faseA = false;
+                        faseB = true;
+                        faseC = false;
+                        break;
+                    case 'C':
+                        faseA = false;
+                        faseB = false;
+                        faseC = true;
+                        break;
                     case 'd':
                         debug=true;
+                        break;
                 }
             }
         }
