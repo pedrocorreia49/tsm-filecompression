@@ -11,8 +11,8 @@
 
 typedef struct Pair{
     unsigned char byte;
-    unsigned char counter;
     unsigned char lenght;
+    int counter;
     int code;
 } pair;
 
@@ -20,8 +20,10 @@ typedef struct Works{
     int id;
     int size_in;
     int size_out;
+    int lastSize;
     unsigned char *buffer_in;
     unsigned char *buffer_out;
+    unsigned char *binaryBuffer;
     pair freqs[256];
     pthread_t tid;
     struct Works *next;
@@ -42,13 +44,15 @@ bool debug = false;
 
 bool faseA = false;
 bool faseB = false;
-bool faseC = false;
+bool faseC = true;
 
 char *inputFile;
 
-clock_t tm, initB;
+clock_t tm, initB, initC;
 double tmRLE;
 double tmSF;
+double tmC;
+
 
 work* newBlock(char* buff_in, int size, int id){
     work *temp = malloc(sizeof(work));
@@ -67,6 +71,7 @@ work* newBlock(char* buff_in, int size, int id){
 
     return temp;
 }
+
 
 void printOut(work* w){
     for(int x=0; x<w->size_out; x++){
@@ -112,126 +117,67 @@ void printFreqs(work* w){
     printf("|-----------------------|\n");
     for(int i = 0; i < 256; i++){
         if(w->freqs[i].counter != 0)
-        printf("| %x\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
+        printf("| %d\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
     }
     printf(" -----------------------\n");
 }
 
-void printSFTable(work* w){
+void printBin(int code, unsigned char lenght){
+    for(int i=0; i<lenght; i++){
+        printf("%d", (code >> (lenght-i-1)) & 1);
+    }
+}
+
+void printSFTableSync(work* w){
     while(w->id != turn){}; // Block thread until it reaches it's turn
 
-    printf("\n %d -------------------------------\n", w->id);
-    printf("| Byte\t| Frequency\t| Code\t|\n");
-    printf("|-------------------------------|\n");
-    for(int i = 0; i < 256; i++){
-        if(w->freqs[i].counter != 0){
-            printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
-            for(int j=0; j<w->freqs[i].lenght; j++){
-                printf("%d", (w->freqs[i].code >> (w->freqs[i].lenght-j-1)) & 1);
+    printf("\n -------------------------------\n");
+    printf("|           Block %d             |", w->id);
+    printf("\n|-------------------------------|\n");
+    if(w->size_out < 256){
+        printf("|    No codes (size < 256)      |\n");
+    }else{
+        printf("| Byte\t| Frequency\t| Code\t|\n");
+        printf("|-------------------------------|\n");
+        for(int i = 0; i < 256; i++){
+            if(w->freqs[i].counter != 0){
+                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+                printBin(w->freqs[i].code, w->freqs[i].lenght);
+                printf("\t|\n");
             }
-            printf("\t|\n");
         }
     }
     printf(" -------------------------------\n");
     turn++;
 }
 
-void debugFun(){
-    work* aux = head;
-    int nBLocks = 0, initialSize=0, endSize=0;
-    int lastSize, secondLastSize;
-
-    while(aux != NULL){
-        nBLocks++;
-
-        secondLastSize = lastSize;
-        lastSize = aux->size_in;
-
-        initialSize += aux->size_in;
-        endSize += aux->size_out;
-
-        aux = aux->next;
-    }
-
-    printf("--------------- DEBUG ---------------\n");
-    printf("Coded by Pedro Correia, Universidade do Minho on 10/06/2021\n\n");
-    printf("Input file: %s\n", inputFile);
-
-    if(faseA){
-        printf("Output file: %s.rle\n", inputFile);
-    }else if(faseB){
-        printf("Output file: No Output\n");
-    }else if(faseC){
-        // TODO
-    }
-
-    printf("Processed with RLE? ");
-    if(worthRLE){
-        printf("Yes\n");
+void printSingleSFTable(work* w){
+    printf("\n -------------------------------\n");
+    printf("|           Block %d             |", w->id);
+    printf("\n|-------------------------------|\n");
+    if(w->size_out < 256){
+        printf("|    No codes (size < 256)      |\n");
     }else{
-        printf("No\n");
-    }
-
-    if(nBLocks>1){
-        printf("Processed blocks size (ALL|LAST) (bytes): %d|%d\n", secondLastSize, lastSize);
-    }else{
-        printf("Processed block size (bytes): %d\n", lastSize);
-    }
-
-    printf("Number of processed blocks: %d\n", nBLocks);
-
-    if(debug){
-        if(worthRLE){
-            if(head->size_out >= 160){
-                printf("\nFirst 160 bytes of block 1:\n[");
-                for(int i = 0; i < 160; i++){
-                    printf(" %x", head->buffer_out[i]);
-                    if((i+1) % 8 == 0 && i != 0)
-                        printf("\n");
+        printf("| Byte\t| Frequency\t| Code\t|\n");
+        printf("|-------------------------------|\n");
+        for(int i = 0; i < 256; i++){
+            if(w->freqs[i].counter != 0){
+                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+                for(int j=0; j<w->freqs[i].lenght; j++){
+                    printf("%d", (w->freqs[i].code >> (w->freqs[i].lenght-j-1)) & 1);
                 }
-                printf(" ]\n");
-            }else{  // If size of less than 160, print only size
-                printf("\nFirst %d bytes of block 1:\n[", head->size_out);
-                for(int i = 0; i < head->size_out; i++){
-                    printf(" %x", head->buffer_out[i]);
-                    if((i+1) % 8 == 0 && i != 0)
-                        printf("\n");
-                }
-                printf(" ]\n");
-            }
-
-            if(head->size_out >= 80){
-                printf("\nLast 80 bytes of block 1:\n[");
-                for(int i = (head->size_out)-80, x=0; i < head->size_out; i++, x++){
-                    printf(" %x", head->buffer_out[i]);
-                    if((x+1) % 8 == 0 && x != 0)
-                        printf("\n");
-                }
-                printf(" ]");
+                printf("\t|\n");
             }
         }
-        
-        if(faseA){
-            printFreqs(head);
-        }else if(faseB){
-            printSFTable(head);
-        }
     }
-
-    // IF RLE WAS NOT USED, END SIZE IS INITIAL SIZE, OTHERWISE
-    printf("\nInitial file size (bytes): %d\nFinal file size (bytes): %d\n", initialSize, endSize);
-
-    float compression = (initialSize-endSize) / (float)initialSize;
-    printf("Compression: %0.2f%%\n", compression*100);
-    printf("A fase execution time: %.3fms", tmRLE);
-
-    printf("\n------------- END DEBUG -------------\n");
+    printf(" -------------------------------\n");
 }
 
-void debugRLE(){
+void debugFun(){
     work* aux = head;
-    int nBLocks = 0, initialSize=0, endSize=0;
+    int nBLocks = 0, initialSize=0, endSizeB=0, endSizeC=0;
     int lastSize, secondLastSize;
+    float compression;
 
     while(aux != NULL){
         nBLocks++;
@@ -240,16 +186,25 @@ void debugRLE(){
         lastSize = aux->size_in;
 
         initialSize += aux->size_in;
-        endSize += aux->size_out;
+        endSizeB += aux->size_out;
+        endSizeC += aux->lastSize;
 
         aux = aux->next;
     }
 
-    printf("-------------- DEBUG A --------------\n");
-    printf("Coded by Pedro Correia, Universidade do Minho on 10/06/2021\n\n");
-    printf("Input file: %s\n", inputFile);
-    printf("Output file: %s.rle\n", inputFile);
-    printf("Processed with RLE? ");
+    printf("\n-------------------------- DEBUG --------------------------\n");
+    printf("* Coded by Pedro Correia, Universidade do Minho on 10/06/2021\n\n");
+    printf("* Input file: %s\n", inputFile);
+
+    if(faseA){
+        printf("* Output file: %s.rle\n", inputFile);
+    }else if(faseB){
+        printf("* Output file: No Output\n");
+    }else if(faseC){
+        printf("* Output file: %s.shaf\n", inputFile);
+    }
+
+    printf("* Processed with RLE? ");
     if(worthRLE){
         printf("Yes\n");
     }else{
@@ -257,55 +212,99 @@ void debugRLE(){
     }
 
     if(nBLocks>1){
-        printf("Processed blocks size (ALL|LAST) (bytes): %d|%d\n", secondLastSize, lastSize);
+        printf("* Processed blocks size (ALL|LAST) (bytes): %d|%d\n", secondLastSize, lastSize);
     }else{
-        printf("Processed block size (bytes): %d\n", lastSize);
+        printf("* Processed block size (bytes): %d\n", lastSize);
     }
 
-    printf("Number of processed blocks: %d\n", nBLocks);
+    printf("* Number of processed blocks: %d\n", nBLocks);
 
     if(debug){
         if(worthRLE){
             if(head->size_out >= 160){
-                printf("\nFirst 160 bytes of block 1:\n[");
+                printf("\n* First 160 bytes of block 1\t|\n");
                 for(int i = 0; i < 160; i++){
-                    printf(" %x", head->buffer_out[i]);
+                    printf("%d ", head->buffer_out[i]);
                     if((i+1) % 8 == 0 && i != 0)
-                        printf("\n");
+                        printf("\t|\n");
                 }
-                printf(" ]\n");
             }else{  // If size of less than 160, print only size
-                printf("\nFirst %d bytes of block 1:\n[", head->size_out);
+                printf("\n* First %d bytes of block 1\t|\n", head->size_out);
                 for(int i = 0; i < head->size_out; i++){
-                    printf(" %x", head->buffer_out[i]);
+                    printf("%d ", head->buffer_out[i]);
                     if((i+1) % 8 == 0 && i != 0)
-                        printf("\n");
+                        printf("\t|\n");
                 }
-                printf(" ]\n");
             }
+            printf("--------------------------------\n");
 
             if(head->size_out >= 80){
-                printf("\nLast 80 bytes of block 1:\n[");
+                printf("\n* Last 80 bytes of block 1\t|\n");
                 for(int i = (head->size_out)-80, x=0; i < head->size_out; i++, x++){
-                    printf(" %x", head->buffer_out[i]);
+                    printf("%d ", head->buffer_out[i]);
                     if((x+1) % 8 == 0 && x != 0)
-                        printf("\n");
+                        printf("\t|\n");
                 }
-                printf(" ]");
+                printf("--------------------------------\n");
             }
         }
-        
-        printFreqs(head);
+
+        if(faseA){
+            printFreqs(head);
+        }else if(faseB | faseC){
+            printSingleSFTable(head); 
+        }
+
+        if(faseC){
+            pair freqs[256];
+            for(int i = 0; i < 256; i++){
+                freqs[head->freqs[i].byte].code = head->freqs[i].code;
+                freqs[head->freqs[i].byte].lenght = head->freqs[i].lenght;
+            }
+
+            if(head->size_out >= 160){
+                printf("\n* First 160 bytes of block 1 (Binary Sequence):\n");
+                for(int i = 0; i < 160; i++){
+                    printBin(freqs[head->buffer_out[i]].code, freqs[head->buffer_out[i]].lenght);
+                    printf(".");
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\t|\n");
+                }
+            }else{  // If size of less than 160, print only size
+                printf("\n* First %d bytes of block 1 (Binary Sequence):\n", head->size_out);
+                for(int i = 0; i < head->size_out; i++){
+                    printf("%d ", head->buffer_out[i]);
+                    if((i+1) % 8 == 0 && i != 0)
+                        printf("\t|\n");
+                }
+            }
+            printf("--------------------------------\n");
+        }
     }
 
-    // IF RLE WAS NOT USED, END SIZE IS INITIAL SIZE, OTHERWISE
-    printf("\nInitial file size (bytes): %d\nFinal file size (bytes): %d\n", initialSize, endSize);
+    printf("* Initial file size (bytes): %d\n", initialSize);
+    if(faseA){
+        printf("* Final file size (bytes): %d\n", endSizeB);
+    }else if(faseC){
+        printf("* Final file size (bytes): %d\n", endSizeC);
+    }
+    
+    if(faseA){
+        compression = (initialSize-endSizeB) / (float)initialSize;
+        printf("* Compression: %0.2f%%\n", compression*100);
+    }else{
+        compression = (initialSize-endSizeC) / (float)initialSize;
+        printf("* Compression: %0.2f%%\n", compression*100);
+    }
+    printf("* A fase execution time: %.3fms\n", tmRLE);
+    if(faseB || faseC){
+        printf("* B fase execution time: %.3fms\n", tmSF);
+    }
+    if(faseC){
+        printf("* C fase execution time: %.3fms\n", tmC);
+    }
 
-    float compression = (initialSize-endSize) / (float)initialSize;
-    printf("Compression: %0.2f%%\n", compression*100);
-    printf("A fase execution time: %.3fms", tmRLE);
-
-    printf("\n------------ END DEBUG A ------------\n");
+    printf("---------------------- END DEBUG --------------------------\n");
 }
 
 void writeRLEBlock(work* w){
@@ -322,8 +321,9 @@ void writeRLEBlock(work* w){
     turn++; // Make the next block leave while cycle
 
     if(w->next == NULL){ // Last block written, show log info
+        tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of A phase execution time
         fclose(fd);
-        debugRLE();
+        debugFun();
     }
 }
 
@@ -418,7 +418,7 @@ int bestDiv(int start, int end, work* w){
     int sumDown = w->freqs[down].counter;
 
     while((down-up) != 1){
-        if(sumUp <= sumDown){
+        if(sumUp < sumDown){
             up++;
             sumUp += w->freqs[up].counter;
         }else{
@@ -465,8 +465,137 @@ void shannonCode(int start, int end, work* w){
 void shannonFano(work* w){
     if(w->size_out >= 256){
         shannonCode(0, 254, w);
+    }
+}
+
+int mask(int num){
+    switch (num){
+        case 1:
+            return 0x1;
+        case 2:
+            return 0x3;
+        case 3:
+            return 0x7;
+        case 4:
+            return 0xF;
+        case 5:
+            return 0x1F;
+        case 6:
+            return 0x3F;
+        case 7:
+            return 0x7F;
+        case 8:
+            return 0xFF;
+    }
+    return 0;
+}
+
+void print_binary(unsigned char c)
+{
+ unsigned char i1 = (1 << (sizeof(c)*8-1));
+ for(; i1; i1 >>= 1)
+      printf("%d",(c&i1)!=0);
+}
+
+int processBinaryBuffer(work* w){
+    pair freqs[256];
+    int pos=0;
+    int open=8;
+    int len, aux;
+    unsigned char cod;
+
+    w->binaryBuffer = malloc(w->size_out * sizeof(char)); // Allocate space on binary buffer
+    memset(w->binaryBuffer, 0, w->size_out);
+    
+    for(int i = 0; i < 256; i++){
+        freqs[w->freqs[i].byte].code = w->freqs[i].code;
+        freqs[w->freqs[i].byte].lenght = w->freqs[i].lenght;
+    }
+
+    for(int i = 0; i < w->size_out; i++){
+        if(freqs[w->buffer_out[i]].lenght <= open){
+            w->binaryBuffer[pos] =  (w->binaryBuffer[pos] | (freqs[w->buffer_out[i]].code << (open-freqs[w->buffer_out[i]].lenght)));
+            open -= freqs[w->buffer_out[i]].lenght;
+        }else{
+            cod = freqs[w->buffer_out[i]].code;
+            len = freqs[w->buffer_out[i]].lenght;
+            while(len >= open){
+                aux = (cod >> (len-open)) & mask(open);
+                w->binaryBuffer[pos] = (w->binaryBuffer[pos] | aux);
+                len = len-open;
+                open = 8;
+                pos++;
+            }
+            if(len > 0){ // If there's code to write (it's less than open)
+                aux = ((cod & mask(len)) << (open-len));
+                w->binaryBuffer[pos] = (w->binaryBuffer[pos] | aux);
+                open = open-len;
+            }
+        }
+        
+        if(open == 0){
+            open = 8;
+            pos++;
+        }
+    }
+
+    return pos;
+}
+
+void writeBinaryBuffer(work* w){
+    unsigned char rle;
+    int freqs[256];
+    unsigned char header[1029]; // 261 is the max size of header (rle(1) + size(4) + sfCodes(256*4))
+    int headerSize = 0;
+
+    while(w->id != turn){}; // Block thread until it reaches it's turn
+
+    if(worthRLE && w->size_in >= 256){
+        rle = 0xFF;
     }else{
-        printf("Not doing SF, because output from A or size_in is less than 256\n");
+        rle = 0;
+    }
+
+    if(w->size_out >= 256) // If this is not true, we don't have SF codes
+    for(int i = 0; i < 256; i++){ // Order freqs by symbol
+        freqs[w->freqs[i].byte] = w->freqs[i].counter;
+    }
+
+    header[0] = rle;
+    header[1] = (w->size_out >> 24) & 0xFF;
+    header[2] = (w->size_out >> 16) & 0xFF;
+    header[3] = (w->size_out >> 8) & 0xFF;
+    header[4] = (w->size_out) & 0xFF;
+    if(w->size_out >= 256){
+        memcpy(header+5, freqs, sizeof(int)*256);
+        headerSize = 1029;
+    }else{
+        headerSize = 5;
+    }
+
+    if(w->id == 1){
+        char f[strlen(inputFile)+5];
+        strcpy(f, inputFile);
+        strcat(f, ".shaf");
+        fd = fopen(f, "w");
+    }
+
+    fwrite(header, 1, headerSize, fd);              // Write header
+
+    // printf("[");
+    // for(int i = 0; i<headerSize; i++){
+    //     printf("%d ", header[i]);
+    // }
+    // printf("]\n");
+    
+    fwrite(w->binaryBuffer, 1, w->lastSize, fd);    // Write Payload
+
+    turn++; // Make the next block leave while cycle
+
+    if(w->next == NULL){ // Last block written, show log info
+        tmC = ((double)(clock()-initC)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
+        fclose(fd);
+        debugFun();
     }
 }
 
@@ -482,28 +611,43 @@ void* processBlock(work* w){
         memcpy(w->buffer_out, w->buffer_in, w->size_in);    // RLE not worth on block 1, so every buffer_out will be buffer_in
         w->size_out = w->size_in;                           // And size_out will be the size_in
     }
-    if(w->next == NULL){ // If last block has been already called to RLE
-        tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get finish time of RLE phase
-    }
 
     if(faseA){
         writeRLEBlock(w);
         pthread_exit(NULL);
+    }else{
+        if(w->next == NULL){
+            tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of A phase execution time
+        }
     }
 
     if(w->id == 1){
         initB = clock();       // Get time before starting SF on first block
     }
     shannonFano(w);
-    if(w->next == NULL){ // If last block has been already called to RLE
-        tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of RLE phase
-    }
     if(faseB){
-        printSFTable(w);
+        printSFTableSync(w);
+        if(w->next == NULL){ // Last block codes printed, show log info
+            tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
+            debugFun();
+        }
         pthread_exit(NULL);
+    }else{
+        if(w->next == NULL){
+            tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
+        }
     }
 
-    pthread_exit(NULL);
+    if(w->id == 1){
+        initC = clock();       // Get time before starting SF on first block
+    }
+    w->lastSize = processBinaryBuffer(w);
+    writeBinaryBuffer(w);
+
+    if(w->next == NULL){
+        pthread_exit(NULL);
+    }
+    
 }
 
 int main(int argc, char *argv[]){
@@ -544,11 +688,6 @@ int main(int argc, char *argv[]){
                         faseA = false;
                         faseB = true;
                         faseC = false;
-                        break;
-                    case 'C':
-                        faseA = false;
-                        faseB = false;
-                        faseC = true;
                         break;
                     case 'd':
                         debug=true;
