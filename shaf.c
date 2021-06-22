@@ -21,6 +21,7 @@ typedef struct Works{
     int size_in;
     int size_out;
     int lastSize;
+    int shafSize;
     unsigned char *buffer_in;
     unsigned char *buffer_out;
     unsigned char *binaryBuffer;
@@ -34,9 +35,9 @@ work *tail = NULL;
 
 FILE* fd;
 
-pthread_mutex_t thr;
-
 int turn = 1;
+
+pthread_mutex_t lock;
 
 bool worthRLE = false;
 bool firstEndedRLE = false;
@@ -48,10 +49,11 @@ bool faseC = true;
 
 char *inputFile;
 
-clock_t tm, initB, initC;
-double tmRLE;
-double tmSF;
-double tmC;
+clock_t totalTime;
+clock_t tm = 0;
+clock_t initB = 0;
+clock_t initC = 0;
+double tmRLE, tmSF, tmC, tmTotal;
 
 
 work* newBlock(char* buff_in, int size, int id){
@@ -128,29 +130,6 @@ void printBin(int code, unsigned char lenght){
     }
 }
 
-void printSFTableSync(work* w){
-    while(w->id != turn){}; // Block thread until it reaches it's turn
-
-    printf("\n -------------------------------\n");
-    printf("|           Block %d             |", w->id);
-    printf("\n|-------------------------------|\n");
-    if(w->size_out < 256){
-        printf("|    No codes (size < 256)      |\n");
-    }else{
-        printf("| Byte\t| Frequency\t| Code\t|\n");
-        printf("|-------------------------------|\n");
-        for(int i = 0; i < 256; i++){
-            if(w->freqs[i].counter != 0){
-                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
-                printBin(w->freqs[i].code, w->freqs[i].lenght);
-                printf("\t|\n");
-            }
-        }
-    }
-    printf(" -------------------------------\n");
-    turn++;
-}
-
 void printSingleSFTable(work* w){
     printf("\n -------------------------------\n");
     printf("|           Block %d             |", w->id);
@@ -187,7 +166,7 @@ void debugFun(){
 
         initialSize += aux->size_in;
         endSizeB += aux->size_out;
-        endSizeC += aux->lastSize;
+        endSizeC += aux->shafSize;
 
         aux = aux->next;
     }
@@ -304,7 +283,38 @@ void debugFun(){
         printf("* C fase execution time: %.3fms\n", tmC);
     }
 
+    tmTotal = ((double)(clock()-totalTime)/CLOCKS_PER_SEC)*1000; // Get total time
+    printf("* Total execution time: %.3fms\n", tmTotal);
+
     printf("---------------------- END DEBUG --------------------------\n");
+}
+
+void printSFTableSync(work* w){
+    while(w->id != turn){}; // Block thread until it reaches it's turn
+
+    printf("\n -------------------------------\n");
+    printf("|           Block %d             |", w->id);
+    printf("\n|-------------------------------|\n");
+    if(w->size_out < 256){
+        printf("|    No codes (size < 256)      |\n");
+    }else{
+        printf("| Byte\t| Frequency\t| Code\t|\n");
+        printf("|-------------------------------|\n");
+        for(int i = 0; i < 256; i++){
+            if(w->freqs[i].counter != 0){
+                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+                printBin(w->freqs[i].code, w->freqs[i].lenght);
+                printf("\t|\n");
+            }
+        }
+    }
+    printf(" -------------------------------\n");
+    turn++;
+
+    if(w->next == NULL){
+        tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
+        debugFun();
+    }
 }
 
 void writeRLEBlock(work* w){
@@ -327,7 +337,7 @@ void writeRLEBlock(work* w){
     }
 }
 
-int writeRleSeq(char byte, int counter, unsigned char *buffer, int pos, pair *freqs){
+int writeRleSeq(unsigned char byte, int counter, unsigned char *buffer, int pos, pair *freqs){
     unsigned char *processed = malloc(head->size_in);
     int n;
 
@@ -371,7 +381,7 @@ void rle(work* w){
     int counter = 0;
     unsigned char byte = w->buffer_in[0];
 
-    w->buffer_out = malloc(w->size_in * sizeof(char)); // Allocate space on output buffer
+    w->buffer_out = malloc((w->size_in * sizeof(char))*2); // Allocate space on output buffer
 
     if(w->size_in < 256){
         memcpy(w->buffer_out, w->buffer_in, w->size_in);
@@ -409,6 +419,7 @@ void rle(work* w){
             worthRLE = true;
         }
         firstEndedRLE = true;
+
     }
 }
 
@@ -589,6 +600,7 @@ void writeBinaryBuffer(work* w){
     // printf("]\n");
     
     fwrite(w->binaryBuffer, 1, w->lastSize, fd);    // Write Payload
+    w->shafSize = headerSize + w->lastSize;
 
     turn++; // Make the next block leave while cycle
 
@@ -600,11 +612,13 @@ void writeBinaryBuffer(work* w){
 }
 
 void* processBlock(work* w){
-    if(w->id == 1)
+    pthread_mutex_lock(&lock);
+    if(tm == 0){            // If this is 0, noone started it, first thread initialize clock
         tm = clock();       // Get time before starting RLE on first block
-    
-    rle(w);
+    }
+    pthread_mutex_unlock(&lock);
 
+    rle(w);
     while(!firstEndedRLE){} // Wait until first block end RLE to check if we can keep going
     if(!worthRLE){          // First already ended, and is not worth the rle, we need to recompute frequencys to buffer in
         freqsIn(w);
@@ -616,41 +630,37 @@ void* processBlock(work* w){
         writeRLEBlock(w);
         pthread_exit(NULL);
     }else{
-        if(w->next == NULL){
-            tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of A phase execution time
-        }
+        tmRLE = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of RLE execution time
     }
 
-    if(w->id == 1){
-        initB = clock();       // Get time before starting SF on first block
+    pthread_mutex_lock(&lock);
+    if(initB == 0){             // If this is 0, noone started it, first thread initialize clock
+        initB = clock();        // Get time before starting SF
     }
+    pthread_mutex_unlock(&lock);
+
     shannonFano(w);
     if(faseB){
         printSFTableSync(w);
-        if(w->next == NULL){ // Last block codes printed, show log info
-            tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
-            debugFun();
-        }
         pthread_exit(NULL);
     }else{
-        if(w->next == NULL){
-            tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get finish time of SF phase
-        }
+        tmSF = ((double)(clock()-initB)/CLOCKS_PER_SEC)*1000; // Get end of SF execution time
     }
 
-    if(w->id == 1){
-        initC = clock();       // Get time before starting SF on first block
+    pthread_mutex_lock(&lock);
+    if(initC == 0){             // If this is 0, noone started it, first thread initialize clock
+        initC = clock();        // Get time before processing binary buffer
     }
+    pthread_mutex_unlock(&lock);
+
     w->lastSize = processBinaryBuffer(w);
     writeBinaryBuffer(w);
 
-    if(w->next == NULL){
-        pthread_exit(NULL);
-    }
-    
+    pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[]){
+    totalTime = clock();
     int i, n;
     int id = 1;
     int bsize = 64000;
@@ -705,9 +715,6 @@ int main(int argc, char *argv[]){
 
     inputFile = argv[1];
 
-    // printf("Total number of cores: %ld\n", sysconf(_SC_NPROCESSORS_ONLN));
-
-    pthread_mutex_init(&thr, 0);
     char *buffer = malloc(bsize * sizeof(char));
     while(n = fread(buffer, sizeof(char), bsize, fd)){
         work *w = newBlock(buffer, n, id);
