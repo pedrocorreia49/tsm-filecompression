@@ -841,12 +841,10 @@ int main(int argc, char *argv[]){
                         break;
                     case 'L':
                         if(argv[i][2] == 'S'){
-                            printf("LS\n");
                             LZW = true;
                             faseC = false;
                         }
                         if(argv[i][2] == 'X'){
-                            printf("LX\n");
                             LZW = true;
                             SF = true;
                         }
