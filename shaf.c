@@ -1,3 +1,15 @@
+/*  TSM - Tecnologias e Serviços Multimédia
+
+    File Compression Program
+        - RLE Algorithm
+        - LZWd Algorithm
+        - Shannon Fano Tables
+        - Shannon Fano Codification
+
+    By: Pedro Alves Correia, A83666
+    University of Minho
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -7,12 +19,11 @@
 #include <stdbool.h>
 #include <time.h>
 
-// Threads em windows e linux, tenho de ter algo a verificar o sistema operativo, e criar as threads conforme o sistema operativo atual ?
-
 typedef struct String{
     unsigned char *string;
     int len;
 }string;
+
 typedef struct Pair{
     unsigned char byte;
     unsigned char lenght;
@@ -50,6 +61,7 @@ pthread_mutex_t lock;
 bool worthRLE = false;
 bool firstEndedRLE = false;
 bool debug = false;
+bool force = false;
 
 bool faseA = false;
 bool faseB = false;
@@ -82,12 +94,6 @@ work* newBlock(char* buff_in, int size, int id){
     }
 
     return temp;
-}
-
-void printOut(work* w){
-    for(int x=0; x<w->size_out; x++){
-        printf("(%x)", w->buffer_out[x]);
-    }
 }
 
 void orderFreqs(work* w){
@@ -127,7 +133,6 @@ void printFreqs(work* w){
     printf("| Byte\t|    Times\t|\n");
     printf("|-----------------------|\n");
     for(int i = 0; i < 256; i++){
-        if(w->freqs[i].counter != 0)
         printf("| %d\t| %d\t\t|\n", w->freqs[i].byte, w->freqs[i].counter);
     }
     printf(" -----------------------\n");
@@ -149,13 +154,11 @@ void printSingleSFTable(work* w){
         printf("| Byte\t| Frequency\t| Code\t|\n");
         printf("|-------------------------------|\n");
         for(int i = 0; i < 256; i++){
-            // if(w->freqs[i].counter != 0){
-                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
-                for(int j=0; j<w->freqs[i].lenght; j++){
-                    printf("%d", (w->freqs[i].code >> (w->freqs[i].lenght-j-1)) & 1);
-                }
-                printf("\t|\n");
-            // }
+            printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+            for(int j=0; j<w->freqs[i].lenght; j++){
+                printf("%d", (w->freqs[i].code >> (w->freqs[i].lenght-j-1)) & 1);
+            }
+            printf("\t|\n");
         }
     }
     
@@ -183,7 +186,7 @@ void debugFun(){
     }
 
     printf("\n-------------------------- DEBUG --------------------------\n");
-    printf("* Coded by Pedro Correia, Universidade do Minho on 10/06/2021\n\n");
+    printf("* Coded by Pedro Correia, Universidade do Minho on 25/06/2021\n\n");
     printf("* Input file: %s\n", inputFile);
 
     if(faseA){
@@ -217,11 +220,13 @@ void debugFun(){
 
     printf("* Number of processed blocks: %d\n", nBLocks);
 
-    printf("* Processed with SF? ");
-    if(SF){
-        printf("Yes\n");
-    }else{
-        printf("No\n");
+    if(LZW){
+        printf("* Processed with SF? ");
+        if(SF){
+            printf("Yes\n");
+        }else{
+            printf("No\n");
+        }
     }
 
     if(debug){
@@ -287,7 +292,10 @@ void debugFun(){
                 printf("--------------------------------\n");
             }
         }else{
-            printf("COLOCAR PRIMEIRO BLOCO LITRALEMNTEADNASDBNASDNOASI");
+            printf("LZW\n");
+            for(int i = 0; i < head->lzwdSize; i++){
+                printf("(%d)", head->buffer_lzw[i]);
+            }
         }
     }
 
@@ -300,7 +308,7 @@ void debugFun(){
         if(SF){
             printf("* Final file size (bytes): %d\n", endSizeC);
         }else{
-            printf("* Final file size (bytes): %d\n", endLZW);
+            printf("* Final file size (bytes): %d\n", endLZW * 2);
         }
     }
     
@@ -315,15 +323,14 @@ void debugFun(){
             compression = (initialSize-endSizeC) / (float)initialSize;
             printf("* Compression: %0.2f%%\n", compression*100);
         }else{
-            compression = (initialSize-endLZW) / (float)initialSize;
+            compression = (initialSize-(endLZW*2)) / (float)initialSize;
             printf("* Compression: %0.2f%%\n", compression*100);
         }
     }
 
     if(LZW){
         printf("* LZW fase execution time: %.3fms\n", tmLZW);
-    }
-    if(faseA){
+    }else{
         printf("* A fase execution time: %.3fms\n", tmRLE);
     }
     if(faseB || faseC || (LZW && SF)){
@@ -351,11 +358,9 @@ void printSFTableSync(work* w){
         printf("| Byte\t| Frequency\t| Code\t|\n");
         printf("|-------------------------------|\n");
         for(int i = 0; i < 256; i++){
-            // if(w->freqs[i].counter != 0){
-                printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
-                printBin(w->freqs[i].code, w->freqs[i].lenght);
-                printf("\t|\n");
-            // }
+            printf("| %d\t| %d\t\t| ", w->freqs[i].byte, w->freqs[i].counter);
+            printBin(w->freqs[i].code, w->freqs[i].lenght);
+            printf("\t|\n");
         }
     }
     printf(" -------------------------------\n");
@@ -467,6 +472,10 @@ void rle(work* w){
         float compression =  (w->size_in - w->size_out) / (float)w->size_in;
         if(compression >= 0.05){ // Compression higher than 5%, it's worth
             worthRLE = true;
+        }else{
+            if(force){
+                worthRLE = true;
+            }
         }
         firstEndedRLE = true;
 
@@ -501,8 +510,8 @@ void addBit(bool bit, work* w, int start, int end){
             }
             w->freqs[byte].lenght++;
         }else{
-            printf("NAO PODE\n");
-            // TEM DE TERMINAR, CÓDIGO ULTRAPASSA 32 bits, o inteiro nao suporta
+            perror("Code is bigger than 32 bits, aborting ...");
+            return -1;
         }
         byte++;
     }
@@ -551,13 +560,6 @@ int mask(int num){
     return 0;
 }
 
-void print_binary(unsigned char c)
-{
- unsigned char i1 = (1 << (sizeof(c)*8-1));
- for(; i1; i1 >>= 1)
-      printf("%d",(c&i1)!=0);
-}
-
 int processBinaryBuffer(work* w){
     pair freqs[256];
     int pos=0;
@@ -587,7 +589,7 @@ int processBinaryBuffer(work* w){
                 open = 8;
                 pos++;
             }
-            if(len > 0){ // If there's code to write (it's less than open)
+            if(len > 0){ // If there's code to write (it's less than open size)
                 aux = ((cod & mask(len)) << (open-len));
                 w->binaryBuffer[pos] = (w->binaryBuffer[pos] | aux);
                 open = open-len;
@@ -606,7 +608,7 @@ int processBinaryBuffer(work* w){
 void writeBinaryBuffer(work* w){
     unsigned char rle;
     int freqs[256];
-    unsigned char header[1029]; // 261 is the max size of header (rle(1) + size(4) + sfCodes(256*4))
+    unsigned char header[1029]; // 1029 is the max size of header (rle(1) + size(4) + sfCodes(256*4))
     int headerSize = 0;
 
     while(w->id != turn){}; // Block thread until it reaches it's turn
@@ -642,12 +644,6 @@ void writeBinaryBuffer(work* w){
     }
 
     fwrite(header, 1, headerSize, fd);              // Write header
-
-    // printf("[");
-    // for(int i = 0; i<headerSize; i++){
-    //     printf("%d ", header[i]);
-    // }
-    // printf("]\n");
     
     fwrite(w->binaryBuffer, 1, w->lastSize, fd);    // Write Payload
     w->shafSize = headerSize + w->lastSize;
@@ -661,7 +657,7 @@ void writeBinaryBuffer(work* w){
     }
 }
 
-int lzwd(work* w){ // Processar o buffer_in,  e guardar o número de frequencias tal como no RLE
+int lzwd(work* w){
     int code = 255;
     int total = 1;
     int tamA = 1, tamB = 1;
@@ -714,7 +710,8 @@ int lzwd(work* w){ // Processar o buffer_in,  e guardar o número de frequencias
     w->buffer_lzw[pos] = lastCode;
     w->freqs[(lastCode >> 8) & 0xFF].counter++; // Increment frequency of this byte
     w->freqs[lastCode & 0xFF].counter++;        // Increment frequency of this byte
-    return 2*(pos+1); // Multiply by 2, because unsigned short occupy 2 bytes, and i return total bytes
+
+    return pos+1; // Multiply by 2, because unsigned short occupy 2 bytes, and i return total bytes
 }
 
 void writeLZWdBlock(work* w){
@@ -727,7 +724,7 @@ void writeLZWdBlock(work* w){
         fd = fopen(f, "w");
     }
 
-    fwrite(w->buffer_lzw, 1, w->shafSize, fd);
+    fwrite(w->buffer_lzw, 1, w->shafSize * sizeof(unsigned short), fd);
     turn++; // Make the next block leave while cycle
 
     if(w->next == NULL){ // Last block written, show log info
@@ -749,12 +746,9 @@ void* processBlock(work* w){
         if(SF){
             tmLZW = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of LZW execution time
             orderFreqs(w);
-            memcpy(w->buffer_out, w->buffer_lzw, w->lzwdSize);
-            printf("VERIFICAR SE A COPIA ESTÁ A SER FEITA PARA O BUFFER, SENAO CRIAR UMA FUN Q COPIAR COM BITWISE OPERATIONS");
-            printf("COM ISTO VERIFICADO, VERIFICAR A CONTA DA COMPRESSION NO DEBUG");
-            printf("VERIFICAR NO DEBUG AS FLAGS E OS PRINTS");
-            w->size_out = w->lzwdSize;
-            printf("VERIFICAR TAMBÉM O TAMANHO SE FAZ SENTIDO (ACHO Q SIM, ESTAO TODOS EM BYTES)");
+            w->buffer_out = malloc(w->lzwdSize * sizeof(unsigned short));
+            memcpy(w->buffer_out, w->buffer_lzw, w->lzwdSize * sizeof(unsigned short));
+            w->size_out = (w->lzwdSize * sizeof(unsigned short));
         }else{
             writeLZWdBlock(w);
             pthread_exit(NULL);
@@ -856,6 +850,10 @@ int main(int argc, char *argv[]){
                             LZW = true;
                             SF = true;
                         }
+                        break;
+                    case 'f':
+                        force = true;
+                        break;
                 }
             }
         }
@@ -885,7 +883,3 @@ int main(int argc, char *argv[]){
 
     return 0;
 }
-
-
-// THREADS WINDOWS E UNIX
-// https://www.embeddedcomputing.com/technology/software-and-os/thread-synchronization-in-linux-and-windows-systems-part-1
