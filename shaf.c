@@ -97,7 +97,7 @@ work* newBlock(char* buff_in, int size, int id){
 }
 
 void orderFreqs(work* w){
-    unsigned char byte=0, val=0;
+    unsigned char byte=0;
     pair p = {0};
 
     for(int i = 0; i < 256; i++){ // Initialize field 'byte' of Pair freq
@@ -511,7 +511,7 @@ void addBit(bool bit, work* w, int start, int end){
             w->freqs[byte].lenght++;
         }else{
             perror("Code is bigger than 32 bits, aborting ...");
-            return -1;
+            exit(-1);
         }
         byte++;
     }
@@ -640,7 +640,7 @@ void writeBinaryBuffer(work* w){
         char f[strlen(inputFile)+5];
         strcpy(f, inputFile);
         strcat(f, ".shaf");
-        fd = fopen(f, "w");
+        fd = fopen(f, "wb");
     }
 
     fwrite(header, 1, headerSize, fd);              // Write header
@@ -857,7 +857,7 @@ int main(int argc, char *argv[]){
         }
     }
 
-    fd = fopen(argv[1], "r");
+    fd = fopen(argv[1], "rb");
     if(fd == 0){
         perror("Error opening file");
         return -1;
