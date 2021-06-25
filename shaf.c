@@ -292,10 +292,10 @@ void debugFun(){
                 printf("--------------------------------\n");
             }
         }else{
-            printf("LZW\n");
             for(int i = 0; i < head->lzwdSize; i++){
                 printf("(%d)", head->buffer_lzw[i]);
             }
+            printf("\n");
         }
     }
 
@@ -724,13 +724,31 @@ void writeLZWdBlock(work* w){
         fd = fopen(f, "w");
     }
 
-    fwrite(w->buffer_lzw, 1, w->shafSize * sizeof(unsigned short), fd);
+    unsigned char header[4]; // 4 Bytes to size
+    header[0] = (w->lzwdSize >> 24) & 0xFF;
+    header[1] = (w->lzwdSize >> 16) & 0xFF;
+    header[2] = (w->lzwdSize >> 8) & 0xFF;
+    header[3] = (w->lzwdSize) & 0xFF;
+    fwrite(header, 1, 4, fd);              // Write header (size of block)
+    fwrite(w->buffer_lzw, 1, w->lzwdSize * sizeof(unsigned short), fd); // Write payload
+    w->lzwdSize = 4 + w->lzwdSize;
+
     turn++; // Make the next block leave while cycle
 
     if(w->next == NULL){ // Last block written, show log info
         tmLZW = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of LZW phase execution time
         fclose(fd);
         debugFun();
+    }
+}
+
+void copyShortToChar(unsigned char* dest, unsigned short* from, int size){
+    int aux=0;
+
+    for(int i = 0; i < size; i++){
+        dest[aux] = (from[i] >> 8) & 0xFF;
+        dest[aux+1] = from[i] & 0xFF;
+        aux = aux+2;
     }
 }
 
@@ -747,7 +765,7 @@ void* processBlock(work* w){
             tmLZW = ((double)(clock()-tm)/CLOCKS_PER_SEC)*1000; // Get end of LZW execution time
             orderFreqs(w);
             w->buffer_out = malloc(w->lzwdSize * sizeof(unsigned short));
-            memcpy(w->buffer_out, w->buffer_lzw, w->lzwdSize * sizeof(unsigned short));
+            copyShortToChar(w->buffer_out, w->buffer_lzw, w->lzwdSize);
             w->size_out = (w->lzwdSize * sizeof(unsigned short));
         }else{
             writeLZWdBlock(w);
