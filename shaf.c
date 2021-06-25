@@ -657,6 +657,13 @@ void writeBinaryBuffer(work* w){
     }
 }
 
+void restartDict(work* w){
+    for(int i = 256; i < 65536; i++){
+        free(w->dict[i].string);
+        w->dict[i].len = 0;
+    }
+}
+
 int lzwd(work* w){
     int code = 255;
     int total = 1;
@@ -680,6 +687,10 @@ int lzwd(work* w){
 
     a = w->buffer_in;
     while(total < w->size_in){
+        if(code == 65535){
+            restartDict(w);
+            code = 255;
+        }
         b = a+tamA;
 
         w->buffer_lzw[pos] = lastCode;
